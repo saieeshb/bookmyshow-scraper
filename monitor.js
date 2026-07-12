@@ -75,7 +75,23 @@ async function checkTickets() {
         await page.mouse.up(); // <-- THIS WAS MISSING
         await page.waitForTimeout(2000); // Give the interface plenty of time...
             
-            await page.waitForTimeout(2000); // Give the interface plenty of time to respond
+        // Inject a visible red dot exactly where the mouse just clicked
+        await page.evaluate(({x, y}) => {
+            const dot = document.createElement('div');
+            dot.style.position = 'absolute';
+            dot.style.left = `${x}px`;
+            dot.style.top = `${y}px`;
+            dot.style.width = '12px';
+            dot.style.height = '12px';
+            dot.style.backgroundColor = 'red';
+            dot.style.borderRadius = '50%';
+            dot.style.zIndex = '999999';
+            dot.style.transform = 'translate(-50%, -50%)'; // Centers the dot directly on the coordinate
+            document.body.appendChild(dot);
+        }, { x: seat.x, y: seat.y });
+
+        // Capture the viewport to see where the dot landed
+        await page.screenshot({ path: 'debug-click.png', fullPage: true });
             
             const screenText = await page.evaluate(() => document.body.innerText.toLowerCase());
             
