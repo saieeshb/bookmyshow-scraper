@@ -1,6 +1,7 @@
 require('dotenv').config();
 const { chromium } = require('playwright-extra');
 const stealth = require('puppeteer-extra-plugin-stealth')();
+const { exec } = require('child_process'); // Added to control PM2 from within Node
 
 chromium.use(stealth);
 
@@ -66,32 +67,31 @@ async function checkTickets() {
         for (let seat of targetSeats) {
             console.log(`Testing click on ${seat.name} at pixels (${seat.x}, ${seat.y})...`);
             
-           
             // Move mouse naturally
-        await page.mouse.move(seat.x, seat.y);
-        await page.waitForTimeout(200);
-        await page.mouse.down();
-        await page.waitForTimeout(100); 
-        await page.mouse.up(); // <-- THIS WAS MISSING
-        await page.waitForTimeout(2000); // Give the interface plenty of time...
+            await page.mouse.move(seat.x, seat.y);
+            await page.waitForTimeout(200);
+            await page.mouse.down();
+            await page.waitForTimeout(100); 
+            await page.mouse.up(); // <-- Fixed click release
+            await page.waitForTimeout(2000); // Give the interface plenty of time...
             
-        // Inject a visible red dot exactly where the mouse just clicked
-        await page.evaluate(({x, y}) => {
-            const dot = document.createElement('div');
-            dot.style.position = 'absolute';
-            dot.style.left = `${x}px`;
-            dot.style.top = `${y}px`;
-            dot.style.width = '12px';
-            dot.style.height = '12px';
-            dot.style.backgroundColor = 'red';
-            dot.style.borderRadius = '50%';
-            dot.style.zIndex = '999999';
-            dot.style.transform = 'translate(-50%, -50%)'; // Centers the dot directly on the coordinate
-            document.body.appendChild(dot);
-        }, { x: seat.x, y: seat.y });
+            // Inject a visible red dot exactly where the mouse just clicked
+            await page.evaluate(({x, y}) => {
+                const dot = document.createElement('div');
+                dot.style.position = 'absolute';
+                dot.style.left = `${x}px`;
+                dot.style.top = `${y}px`;
+                dot.style.width = '12px';
+                dot.style.height = '12px';
+                dot.style.backgroundColor = 'red';
+                dot.style.borderRadius = '50%';
+                dot.style.zIndex = '999999';
+                dot.style.transform = 'translate(-50%, -50%)'; // Centers the dot directly on the coordinate
+                document.body.appendChild(dot);
+            }, { x: seat.x, y: seat.y });
 
-        // Capture the viewport to see where the dot landed
-        await page.screenshot({ path: 'debug-click.png', fullPage: true });
+            // Capture the viewport to see where the dot landed
+            await page.screenshot({ path: 'debug-click.png', fullPage: true });
             
             const screenText = await page.evaluate(() => document.body.innerText.toLowerCase());
             
@@ -105,9 +105,15 @@ async function checkTickets() {
             console.log("SUCCESS: Click registered an open seat!");
             await sendTelegramAlert(`🚨 Target seats are live! The Pay button appeared. Go check: ${url}`);
             
-            // FIX: Close the browser and kill the monitor completely
+            // Close the browser to prevent memory leaks
             await context.close(); 
-            process.exit(0); 
+            
+            // Explicitly command PM2 to freeze this specific process tree permanently
+            exec('pm2 stop bms-cloud', (err) => {
+                if (err) console.error("Failed to stop PM2 wrapper:", err);
+                process.exit(0); 
+            });
+            
         } else {
             console.log("Clicks did not trigger a Pay button. Seats are blocked. Checking again later.");
             await context.close();
