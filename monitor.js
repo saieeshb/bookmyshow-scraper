@@ -66,12 +66,14 @@ async function checkTickets() {
         for (let seat of targetSeats) {
             console.log(`Testing click on ${seat.name} at pixels (${seat.x}, ${seat.y})...`);
             
+           
             // Move mouse naturally
-            await page.mouse.move(seat.x, seat.y);
-            await page.waitForTimeout(200); 
-            await page.mouse.down();
-            await page.waitForTimeout(100); 
-            await page.mouse.up();
+        await page.mouse.move(seat.x, seat.y);
+        await page.waitForTimeout(200);
+        await page.mouse.down();
+        await page.waitForTimeout(100); 
+        await page.mouse.up(); // <-- THIS WAS MISSING
+        await page.waitForTimeout(2000); // Give the interface plenty of time...
             
             await page.waitForTimeout(2000); // Give the interface plenty of time to respond
             
