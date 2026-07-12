@@ -1,54 +1,104 @@
 require('dotenv').config();
 const { chromium } = require('playwright-extra');
 const stealth = require('puppeteer-extra-plugin-stealth')();
-const { exec } = require('child_process'); // Added to control PM2 from within Node
+const TelegramBot = require('node-telegram-bot-api');
 
 chromium.use(stealth);
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
-const chatId = process.env.TELEGRAM_CHAT_ID;
-const url = process.env.BMS_EVENT_URL;
+// Parse the comma-separated IDs from your .env file into a clean array
+const allowedChatIds = process.env.TELEGRAM_CHAT_IDS ? process.env.TELEGRAM_CHAT_IDS.split(',').map(id => id.trim()) : [];
 
-// Replace x and y with your exact coordinates for N42
-const targetSeats = [
-    { name: 'F31', x: 690, y: 226 } 
-];
+// Initialize the Bot to constantly listen for messages
+const bot = new TelegramBot(token, { polling: true });
 
-async function sendTelegramAlert(message) {
-    const tgUrl = `https://api.telegram.org/bot${token}/sendMessage`;
-    try {
-        await fetch(tgUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, text: message })
-        });
-        console.log("Telegram alert sent successfully.");
-    } catch (err) { }
-}
+// Dynamic Bot State
+let currentUrl = null;
+let currentSeats = [];
+let monitorIntervalId = null;
+let isChecking = false; 
 
+// --- TELEGRAM COMMAND LISTENER ---
+bot.on('message', (msg) => {
+    const chatId = msg.chat.id.toString();
+    const text = msg.text || '';
+
+    // Security check: Ignore messages from strangers not in your .env list
+    if (!allowedChatIds.includes(chatId)) return; 
+
+    // Command: /monitor <url> <seatName> <x> <y>
+    if (text.startsWith('/monitor')) {
+        const parts = text.split(' ');
+        
+        if (parts.length < 5) {
+            return bot.sendMessage(chatId, "⚠️ Invalid format.\nUsage: `/monitor <URL> <SeatName> <X> <Y>`\nExample: `/monitor https://in.bookmyshow.com/... N42 299 495`", { parse_mode: 'Markdown' });
+        }
+
+        currentUrl = parts[1];
+        const seatName = parts[2];
+        const x = parseInt(parts[3]);
+        const y = parseInt(parts[4]);
+
+        currentSeats = [{ name: seatName, x: x, y: y }];
+
+        bot.sendMessage(chatId, `🎯 Target acquired by user!\n\n**Seat:** ${seatName}\n**Pixels:** (${x}, ${y})\n**Link:** ${currentUrl}\n\nStarting background checks every 5 minutes...`, { parse_mode: 'Markdown' });
+
+        // Clear any old monitor loops
+        if (monitorIntervalId) clearInterval(monitorIntervalId);
+        
+        // Run once immediately, then start the 5-minute loop
+        checkTickets(); 
+        monitorIntervalId = setInterval(checkTickets, 300000); 
+    } 
+    
+    // Command: /stop
+    else if (text === '/stop') {
+        if (monitorIntervalId) {
+            clearInterval(monitorIntervalId);
+            monitorIntervalId = null;
+            bot.sendMessage(chatId, "🛑 Monitoring paused. Standing by for new commands.");
+        } else {
+            bot.sendMessage(chatId, "I am not currently monitoring any seats.");
+        }
+    }
+
+    // Command: /status
+    else if (text === '/status') {
+        if (monitorIntervalId) {
+            bot.sendMessage(chatId, `🟢 Currently running a check for **${currentSeats[0].name}** at coordinates (${currentSeats[0].x}, ${currentSeats[0].y}).`, { parse_mode: 'Markdown' });
+        } else {
+            bot.sendMessage(chatId, "🔴 Currently idle.");
+        }
+    }
+});
+
+// --- THE PLAYWRIGHT SCRAPER ---
 async function checkTickets() {
+    if (!currentUrl || currentSeats.length === 0) return;
+    if (isChecking) {
+        console.log("A check is already in progress. Skipping this cycle.");
+        return; 
+    }
+
+    isChecking = true;
     console.log(`Checking BookMyShow at ${new Date().toLocaleTimeString()}...`);
     
-    // THE UNDERGROUND LAUNCH:
-    // We switch to a persistent context and drop all default automation parameters.
-    // This removes the "Chrome is being controlled by automated software" banner entirely.
     const context = await chromium.launchPersistentContext('', {
         headless: false,
         channel: 'chrome',
         viewport: { width: 1280, height: 800 },
-        ignoreDefaultArgs: ['--enable-automation'], // Removes the primary bot flag
+        ignoreDefaultArgs: ['--enable-automation'],
         args: [
-            '--disable-blink-features=AutomationControlled', // Erases navigator.webdriver
+            '--disable-blink-features=AutomationControlled',
             '--no-sandbox',
             '--disable-infobars'
         ]
     });
     
-    // Grab the initial page created by the persistent context
     const page = context.pages()[0] || await context.newPage();
 
     try {
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
         
         try {
             console.log("Waiting for popup...");
@@ -64,18 +114,17 @@ async function checkTickets() {
 
         let foundOpenSeat = false;
 
-        for (let seat of targetSeats) {
+        for (let seat of currentSeats) {
             console.log(`Testing click on ${seat.name} at pixels (${seat.x}, ${seat.y})...`);
             
-            // Move mouse naturally
             await page.mouse.move(seat.x, seat.y);
             await page.waitForTimeout(200);
             await page.mouse.down();
             await page.waitForTimeout(100); 
-            await page.mouse.up(); // <-- Fixed click release
-            await page.waitForTimeout(2000); // Give the interface plenty of time...
+            await page.mouse.up();
+            await page.waitForTimeout(2000); 
             
-            // Inject a visible red dot exactly where the mouse just clicked
+            // Inject visual red dot for debugging screenshots
             await page.evaluate(({x, y}) => {
                 const dot = document.createElement('div');
                 dot.style.position = 'absolute';
@@ -86,11 +135,10 @@ async function checkTickets() {
                 dot.style.backgroundColor = 'red';
                 dot.style.borderRadius = '50%';
                 dot.style.zIndex = '999999';
-                dot.style.transform = 'translate(-50%, -50%)'; // Centers the dot directly on the coordinate
+                dot.style.transform = 'translate(-50%, -50%)'; 
                 document.body.appendChild(dot);
             }, { x: seat.x, y: seat.y });
 
-            // Capture the viewport to see where the dot landed
             await page.screenshot({ path: 'debug-click.png', fullPage: true });
             
             const screenText = await page.evaluate(() => document.body.innerText.toLowerCase());
@@ -103,27 +151,28 @@ async function checkTickets() {
 
         if (foundOpenSeat) {
             console.log("SUCCESS: Click registered an open seat!");
-            await sendTelegramAlert(`🚨 Target seats are live! The Pay button appeared. Go check: ${url}`);
             
-            // Close the browser to prevent memory leaks
+            // Broadcast to every ID in the allowedChatIds array
+            for (const id of allowedChatIds) {
+                bot.sendMessage(id, `🚨 **TARGET SEATS ARE LIVE!** 🚨\n\nThe Pay button appeared for ${currentSeats[0].name}. Go check immediately:\n${currentUrl}`, { parse_mode: 'Markdown' })
+                   .catch(err => console.error(`Failed to send to ${id}:`, err.message));
+            }
+            
             await context.close(); 
-            
-            // Explicitly command PM2 to freeze this specific process tree permanently
-            exec('pm2 stop bms-cloud', (err) => {
-                if (err) console.error("Failed to stop PM2 wrapper:", err);
-                process.exit(0); 
-            });
+            clearInterval(monitorIntervalId); // Stop the background loop
+            monitorIntervalId = null;
+            isChecking = false;
             
         } else {
-            console.log("Clicks did not trigger a Pay button. Seats are blocked. Checking again later.");
+            console.log("Seats are blocked. Checking again later.");
             await context.close();
+            isChecking = false;
         }
     } catch (error) {
         console.error("Error checking page:", error.message);
         await context.close();
+        isChecking = false;
     }
 }
 
-// Run every 5 minutes
-setInterval(checkTickets, 300000);
-checkTickets();
+console.log("Telegram Bot is online and listening for commands...");
