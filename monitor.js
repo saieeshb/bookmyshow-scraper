@@ -8,9 +8,9 @@ const token = process.env.TELEGRAM_BOT_TOKEN;
 const chatId = process.env.TELEGRAM_CHAT_ID;
 const url = process.env.BMS_EVENT_URL;
 
-// Replace x and y with your exact coordinates for J24
+// Replace x and y with your exact coordinates for N42
 const targetSeats = [
-    { name: 'J24', x: 772, y: 329 } 
+    { name: 'N42', x: 272, y: 224 } 
 ];
 
 async function sendTelegramAlert(message) {
