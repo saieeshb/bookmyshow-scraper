@@ -11,7 +11,7 @@ const url = process.env.BMS_EVENT_URL;
 
 // Replace x and y with your exact coordinates for N42
 const targetSeats = [
-    { name: 'N42', x: 299, y: 495 } 
+    { name: 'F31', x: 690, y: 226 } 
 ];
 
 async function sendTelegramAlert(message) {
